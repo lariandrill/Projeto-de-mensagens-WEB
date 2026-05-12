@@ -11,7 +11,7 @@ button.menu-btn { background: none; font-size: 22px; padding: 0 10px; }
 
 /* Logo */
 .logo-container { text-align: center; margin: 20px 0 5px; }
-.logo-img { max-width: 180px; height: auto; }
+.logo-img { max-width: 280px; height: auto; }
 .app-name { font-size: 28px; text-align: center; margin-bottom: 5px; font-weight: bold; }
 .welcome { font-size: 18px; text-align: center; margin-bottom: 15px; }
 #server-status { text-align: center; font-size: 13px; }
