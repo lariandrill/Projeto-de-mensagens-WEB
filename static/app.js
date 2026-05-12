@@ -1,32 +1,23 @@
-// ---------- Variáveis globais ----------
+// ---------- Variáveis ----------
 let socket = null;
 let username = null;
-let pubKey = null;          // chave pública PEM
-let privKey = null;         // chave privada PEM
+let pubKey = null;
+let privKey = null;
 let destinatarioAtual = null;
-let chavesAmigos = {};      // { username: publicKeyPEM }
+let chavesAmigos = {};
 let todosContatos = [];
 let typingTimer = null;
+let naoLidas = {};
+let pendingConfirmations = {};
 
-// Controle de mensagens não lidas e status de entrega
-let naoLidas = {};                    // { username: count }
-let pendingConfirmations = {};        // { username: DOMElement }
-
-// ---------- Inicialização ----------
 window.onload = function() {
   socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
   setupSocketListeners();
   setupUI();
   checkServerStatus();
   setInterval(checkServerStatus, 15000);
-
-  // Solicitar permissão de notificação
-  if (window.Notification && Notification.permission !== 'granted') {
-    Notification.requestPermission();
-  }
 };
 
-// ---------- UI ----------
 function setupUI() {
   document.getElementById('login-btn').addEventListener('click', login);
   document.getElementById('show-register-btn').addEventListener('click', showRegister);
@@ -46,23 +37,17 @@ function setupUI() {
     document.getElementById('contacts-overlay').classList.remove('active');
   });
   document.getElementById('twofa-btn').addEventListener('click', verify2FA);
-  document.getElementById('twofa-cancel-btn').addEventListener('click', () => {
-    showLogin();
-  });
-  // Checkbox de configurações
+  document.getElementById('twofa-cancel-btn').addEventListener('click', () => showLogin());
   document.getElementById('notificacoes-check').addEventListener('change', saveConfig);
   document.getElementById('confirmacao-check').addEventListener('change', saveConfig);
 
-  // Carregar configurações salvas
   const saved = JSON.parse(localStorage.getItem('hermes_config') || '{}');
   if (saved.notificacoes !== undefined) document.getElementById('notificacoes-check').checked = saved.notificacoes;
   if (saved.confirmacao !== undefined) document.getElementById('confirmacao-check').checked = saved.confirmacao;
 }
 
-function showScreen(screenId) {
-  document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
-  document.getElementById(screenId).classList.add('active');
-}
+// funções de tela
+function showScreen(id) { document.querySelectorAll('.screen').forEach(el => el.classList.remove('active')); document.getElementById(id).classList.add('active'); }
 function showRegister() { showScreen('register-screen'); }
 function showLogin() { showScreen('login-screen'); }
 function showChat() { showScreen('chat-screen'); }
@@ -73,13 +58,12 @@ function showError(msg, isReg = false) {
   el.textContent = msg;
 }
 
-// ---------- Servidor status ----------
 function checkServerStatus() {
   fetch('/status')
-    .then(res => res.json())
-    .then(data => {
-      document.getElementById('server-status').textContent = data.status === 'online' ? 'Servidor online' : 'Servidor offline';
-      document.getElementById('server-status').style.color = data.status === 'online' ? '#0f0' : '#f00';
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('server-status').textContent = d.status === 'online' ? 'Servidor online' : 'Servidor offline';
+      document.getElementById('server-status').style.color = d.status === 'online' ? '#0f0' : '#f00';
     })
     .catch(() => {
       document.getElementById('server-status').textContent = 'Servidor offline';
@@ -100,38 +84,43 @@ function gerarParChaves() {
   return { publicKey: crypt.getPublicKey(), privateKey: crypt.getPrivateKey() };
 }
 
-function criptografar(texto, publicKeyPEM) {
+function criptografar(texto, pub) {
   const crypt = new JSEncrypt();
-  crypt.setPublicKey(publicKeyPEM);
+  crypt.setPublicKey(pub);
   return crypt.encrypt(texto);
 }
 
-function descriptografar(textoCifrado, privateKeyPEM) {
+function descriptografar(texto, priv) {
   const crypt = new JSEncrypt();
-  crypt.setPrivateKey(privateKeyPEM);
-  return crypt.decrypt(textoCifrado);
+  crypt.setPrivateKey(priv);
+  return crypt.decrypt(texto);
 }
 
-// ---------- Badge de mensagens não lidas ----------
+// ---------- Badge ----------
 function atualizarBadgeNaoLidas() {
-  const total = Object.values(naoLidas).reduce((sum, val) => sum + val, 0);
+  const total = Object.values(naoLidas).reduce((a, b) => a + b, 0);
   const btn = document.getElementById('contacts-btn');
   if (total > 0) {
     btn.textContent = `SELECIONAR (${total})`;
-    btn.style.background = '#c80';  // laranja
+    btn.style.background = '#c80';
   } else {
     btn.textContent = 'SELECIONAR';
-    btn.style.background = '#36c';  // azul original
+    btn.style.background = '#36c';
   }
 }
 
-// ---------- Autenticação ----------
+// ---------- Autenticação com try/catch ----------
 async function login() {
   const u = document.getElementById('login-username').value.trim();
   const p = document.getElementById('login-password').value.trim();
   if (!u || !p) { showError('Preencha todos os campos!'); return; }
-  const hash = await sha256(p);
-  socket.emit('login_usuario', { username: u, password_hash: hash });
+  try {
+    const hash = await sha256(p);
+    socket.emit('login_usuario', { username: u, password_hash: hash });
+  } catch (e) {
+    showError('Erro ao processar senha.');
+    console.error(e);
+  }
 }
 
 async function register() {
@@ -142,11 +131,15 @@ async function register() {
   if (!u || !p || !c || !e) { showError('Preencha todos os campos!', true); return; }
   if (p !== c) { showError('Senhas não coincidem!', true); return; }
   if (!e.includes('@') || !e.includes('.')) { showError('E-mail inválido', true); return; }
-  const hash = await sha256(p);
-  socket.emit('registrar_usuario_credencial', { username: u, password_hash: hash, email: e });
+  try {
+    const hash = await sha256(p);
+    socket.emit('registrar_usuario_credencial', { username: u, password_hash: hash, email: e });
+  } catch (e) {
+    showError('Erro ao processar senha.', true);
+    console.error(e);
+  }
 }
 
-// ---------- Verificação 2FA ----------
 function verify2FA() {
   const code = document.getElementById('twofa-code').value.trim();
   if (code.length !== 6) {
@@ -166,32 +159,28 @@ function finalizarLogin(user) {
   showChat();
 }
 
-// ---------- SocketIO Listeners ----------
+// ---------- Socket Listeners ----------
 function setupSocketListeners() {
   socket.on('connect', () => {
     document.getElementById('status-led').className = 'led online';
     document.getElementById('status-text').textContent = 'Online';
   });
-
   socket.on('disconnect', () => {
     document.getElementById('status-led').className = 'led offline';
     document.getElementById('status-text').textContent = 'Offline';
   });
-
   socket.on('login_response', (data) => {
     if (data.success) {
       if (data.awaiting_2fa) {
         showTwoFA();
         document.getElementById('twofa-error').textContent = '';
       } else {
-        // login direto (caso 2FA seja desabilitado futuramente)
         finalizarLogin(data.username);
       }
     } else {
       showError(data.message || 'Erro no login');
     }
   });
-
   socket.on('registro_response', (data) => {
     if (data.success) {
       showLogin();
@@ -200,7 +189,6 @@ function setupSocketListeners() {
       showError(data.message || 'Erro no registro', true);
     }
   });
-
   socket.on('verify_2fa_response', (data) => {
     if (data.success) {
       finalizarLogin(data.username);
@@ -208,101 +196,57 @@ function setupSocketListeners() {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
     }
   });
-
+  // (demais listeners para message, historico, digitando, delivery_confirmation, lista_contatos – manter os já existentes)
   socket.on('lista_contatos', (contatos) => {
     todosContatos = contatos;
-    // Atualizar chaves dos amigos
-    contatos.forEach(c => {
-      if (c.public_key && c.username !== username) {
-        chavesAmigos[c.username] = c.public_key;
-      }
-    });
-    // Atualizar badge (pode ter havido alterações)
+    contatos.forEach(c => { if (c.public_key && c.username !== username) chavesAmigos[c.username] = c.public_key; });
     atualizarBadgeNaoLidas();
   });
-
   socket.on('message', (data) => {
-    let from = data.from;
-    let content = data.content;
-    let offline = data.offline || false;
-    // Descriptografar
-    let texto = content;
-    if (privKey && content) {
-      try {
-        const dec = descriptografar(content, privKey);
-        if (dec) texto = dec;
-      } catch(e) {}
-    }
+    let from = data.from, content = data.content, texto = content;
+    if (privKey && content) { try { const dec = descriptografar(content, privKey); if (dec) texto = dec; } catch(e) {} }
     if (from === destinatarioAtual) {
       addMessage(from + ': ' + texto, 'left');
       socket.emit('marcar_lida', { contato: from });
     } else {
-      // Incrementar contagem de não lidas
       if (!naoLidas[from]) naoLidas[from] = 0;
       naoLidas[from]++;
       atualizarBadgeNaoLidas();
-
-      // Notificação visual
-      if (document.getElementById('notificacoes-check').checked && window.Notification && Notification.permission === 'granted') {
+      if (document.getElementById('notificacoes-check').checked && Notification.permission === 'granted') {
         new Notification(from, { body: texto.substring(0, 100), icon: '/static/Logo.png' });
       }
     }
   });
-
   socket.on('historico_mensagens', (data) => {
-    const container = document.getElementById('chat-messages');
-    container.innerHTML = '';
+    document.getElementById('chat-messages').innerHTML = '';
     data.mensagens.forEach(msg => {
       let texto = msg.content;
-      if (privKey && texto) {
-        try {
-          const dec = descriptografar(texto, privKey);
-          if (dec) texto = dec;
-        } catch(e) {}
-      }
-      if (msg.from === username) {
-        addMessage('Você: ' + texto, 'right');
-      } else {
-        addMessage(msg.from + ': ' + texto, 'left');
-      }
+      if (privKey && texto) { try { const dec = descriptografar(texto, privKey); if (dec) texto = dec; } catch(e) {} }
+      addMessage((msg.from === username ? 'Você' : msg.from) + ': ' + texto, msg.from === username ? 'right' : 'left');
     });
   });
-
   socket.on('digitando', (data) => {
     if (data.from === destinatarioAtual) {
       document.getElementById('typing-indicator').textContent = data.from + ' está digitando...';
       clearTimeout(typingTimer);
-      typingTimer = setTimeout(() => {
-        document.getElementById('typing-indicator').textContent = '';
-      }, 2000);
+      typingTimer = setTimeout(() => { document.getElementById('typing-indicator').textContent = ''; }, 2000);
     }
   });
-
-  // ---------- Confirmação de entrega ----------
   socket.on('delivery_confirmation', (data) => {
     const { to, from, status } = data;
     if (from === username && pendingConfirmations[to]) {
-      const statusEl = pendingConfirmations[to];
+      const el = pendingConfirmations[to];
       switch (status) {
-        case 'delivered':
-          statusEl.textContent = ' ✓';
-          statusEl.style.color = '#0f0';
-          break;
-        case 'stored_offline':
-          statusEl.textContent = ' ⏳';
-          statusEl.style.color = '#ff0';
-          break;
-        case 'failed':
-          statusEl.textContent = ' ✗';
-          statusEl.style.color = '#f00';
-          break;
+        case 'delivered': el.textContent = ' ✓'; el.style.color = '#0f0'; break;
+        case 'stored_offline': el.textContent = ' ⏳'; el.style.color = '#ff0'; break;
+        case 'failed': el.textContent = ' ✗'; el.style.color = '#f00'; break;
       }
       delete pendingConfirmations[to];
     }
   });
 }
 
-// ---------- Funções da UI ----------
+// ---------- UI mensagens ----------
 function addMessage(texto, lado, isTemp = false) {
   const div = document.createElement('div');
   div.className = 'message ' + lado;
@@ -316,11 +260,7 @@ function addMessage(texto, lado, isTemp = false) {
     statusSpan.style.fontSize = '0.8em';
     div.appendChild(textSpan);
     div.appendChild(statusSpan);
-    // Guardar referência para atualização futura
-    if (destinatarioAtual) {
-      pendingConfirmations[destinatarioAtual] = statusSpan;
-    }
-    // Timeout para caso não receba confirmação (30s)
+    if (destinatarioAtual) pendingConfirmations[destinatarioAtual] = statusSpan;
     setTimeout(() => {
       if (statusSpan.textContent === ' ⌛' && pendingConfirmations[destinatarioAtual] === statusSpan) {
         statusSpan.textContent = ' ⚠️';
@@ -346,11 +286,7 @@ function sendMessage() {
   input.value = '';
 }
 
-function emitTyping() {
-  if (destinatarioAtual) {
-    socket.emit('digitando', { to: destinatarioAtual, from: username });
-  }
-}
+function emitTyping() { if (destinatarioAtual) socket.emit('digitando', { to: destinatarioAtual, from: username }); }
 
 // ---------- Menu e Contatos ----------
 function openMenu() {
@@ -372,12 +308,7 @@ function showContacts() {
       destinatarioAtual = c.username;
       document.getElementById('destinatario-label').textContent = 'Para: ' + c.username;
       document.getElementById('contacts-overlay').classList.remove('active');
-      // Zerar não lidas deste contato
-      if (naoLidas[c.username]) {
-        delete naoLidas[c.username];
-        atualizarBadgeNaoLidas();
-      }
-      // Solicitar histórico
+      if (naoLidas[c.username]) { delete naoLidas[c.username]; atualizarBadgeNaoLidas(); }
       socket.emit('solicitar_historico', { contato: c.username });
     });
     listDiv.appendChild(item);
@@ -385,23 +316,13 @@ function showContacts() {
   document.getElementById('contacts-overlay').classList.add('active');
 }
 
-function atualizarContatos() {
-  socket.emit('solicitar_contatos');
-  closeMenu();
-}
+function atualizarContatos() { socket.emit('solicitar_contatos'); closeMenu(); }
 
 function logout() {
   socket.disconnect();
-  username = null;
-  pubKey = null;
-  privKey = null;
-  destinatarioAtual = null;
-  chavesAmigos = {};
-  todosContatos = [];
-  naoLidas = {};
-  pendingConfirmations = {};
+  username = null; pubKey = null; privKey = null; destinatarioAtual = null;
+  chavesAmigos = {}; todosContatos = []; naoLidas = {}; pendingConfirmations = {};
   showScreen('login-screen');
-  // Reconectar
   socket.connect();
 }
 
