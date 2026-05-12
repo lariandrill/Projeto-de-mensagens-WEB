@@ -1,16 +1,14 @@
 // ---------- Variáveis globais ----------
 let socket = null;
 let username = null;
-let pubKey = null;          // chave pública PEM
-let privKey = null;         // chave privada PEM
+let pubKey = null;
+let privKey = null;
 let destinatarioAtual = null;
-let chavesAmigos = {};      // { username: publicKeyPEM }
+let chavesAmigos = {};
 let todosContatos = [];
 let typingTimer = null;
-
-// Controle de mensagens não lidas e status de entrega
-let naoLidas = {};                    // { username: count }
-let pendingConfirmations = {};        // { username: DOMElement }
+let naoLidas = {};
+let pendingConfirmations = {};
 
 // ---------- Inicialização ----------
 window.onload = function() {
@@ -20,7 +18,6 @@ window.onload = function() {
   checkServerStatus();
   setInterval(checkServerStatus, 15000);
 
-  // Solicitar permissão de notificação
   if (window.Notification && Notification.permission !== 'granted') {
     Notification.requestPermission();
   }
@@ -45,11 +42,9 @@ function setupUI() {
   document.getElementById('contacts-close-btn').addEventListener('click', () => {
     document.getElementById('contacts-overlay').classList.remove('active');
   });
-  // Checkbox de configurações
   document.getElementById('notificacoes-check').addEventListener('change', saveConfig);
   document.getElementById('confirmacao-check').addEventListener('change', saveConfig);
 
-  // Carregar configurações salvas
   const saved = JSON.parse(localStorage.getItem('hermes_config') || '{}');
   if (saved.notificacoes !== undefined) document.getElementById('notificacoes-check').checked = saved.notificacoes;
   if (saved.confirmacao !== undefined) document.getElementById('confirmacao-check').checked = saved.confirmacao;
@@ -70,13 +65,16 @@ function showError(msg, isReg = false) {
 
 // ---------- Servidor status ----------
 function checkServerStatus() {
-  fetch('/').then(res => res.json()).then(data => {
-    document.getElementById('server-status').textContent = data.status === 'online' ? 'Servidor online' : 'Servidor offline';
-    document.getElementById('server-status').style.color = data.status === 'online' ? '#0f0' : '#f00';
-  }).catch(() => {
-    document.getElementById('server-status').textContent = 'Servidor offline';
-    document.getElementById('server-status').style.color = '#f00';
-  });
+  fetch('/status')
+    .then(res => res.json())
+    .then(data => {
+      document.getElementById('server-status').textContent = data.status === 'online' ? 'Servidor online' : 'Servidor offline';
+      document.getElementById('server-status').style.color = data.status === 'online' ? '#0f0' : '#f00';
+    })
+    .catch(() => {
+      document.getElementById('server-status').textContent = 'Servidor offline';
+      document.getElementById('server-status').style.color = '#f00';
+    });
 }
 
 // ---------- Criptografia ----------
@@ -104,16 +102,15 @@ function descriptografar(textoCifrado, privateKeyPEM) {
   return crypt.decrypt(textoCifrado);
 }
 
-// ---------- Badge de mensagens não lidas ----------
 function atualizarBadgeNaoLidas() {
   const total = Object.values(naoLidas).reduce((sum, val) => sum + val, 0);
   const btn = document.getElementById('contacts-btn');
   if (total > 0) {
     btn.textContent = `SELECIONAR (${total})`;
-    btn.style.background = '#c80';  // laranja
+    btn.style.background = '#c80';
   } else {
     btn.textContent = 'SELECIONAR';
-    btn.style.background = '#36c';  // azul original
+    btn.style.background = '#36c';
   }
 }
 
@@ -173,21 +170,17 @@ function setupSocketListeners() {
 
   socket.on('lista_contatos', (contatos) => {
     todosContatos = contatos;
-    // Atualizar chaves dos amigos
     contatos.forEach(c => {
       if (c.public_key && c.username !== username) {
         chavesAmigos[c.username] = c.public_key;
       }
     });
-    // Atualizar badge 
     atualizarBadgeNaoLidas();
   });
 
   socket.on('message', (data) => {
     let from = data.from;
     let content = data.content;
-    let offline = data.offline || false;
-    // Descriptografar
     let texto = content;
     if (privKey && content) {
       try {
@@ -199,14 +192,12 @@ function setupSocketListeners() {
       addMessage(from + ': ' + texto, 'left');
       socket.emit('marcar_lida', { contato: from });
     } else {
-      // Incrementar contagem de não lidas
       if (!naoLidas[from]) naoLidas[from] = 0;
       naoLidas[from]++;
       atualizarBadgeNaoLidas();
 
-      // Notificação visual
       if (document.getElementById('notificacoes-check').checked && window.Notification && Notification.permission === 'granted') {
-        new Notification(from, { body: texto.substring(0, 100), icon: '/static/icon.png' });
+        new Notification(from, { body: texto.substring(0, 100), icon: '/static/Logo.png' });
       }
     }
   });
@@ -240,7 +231,6 @@ function setupSocketListeners() {
     }
   });
 
-  // ---------- Confirmação de entrega ----------
   socket.on('delivery_confirmation', (data) => {
     const { to, from, status } = data;
     if (from === username && pendingConfirmations[to]) {
@@ -278,11 +268,9 @@ function addMessage(texto, lado, isTemp = false) {
     statusSpan.style.fontSize = '0.8em';
     div.appendChild(textSpan);
     div.appendChild(statusSpan);
-    // Guardar referência para atualização futura
     if (destinatarioAtual) {
       pendingConfirmations[destinatarioAtual] = statusSpan;
     }
-    // Timeout para caso não receba confirmação (30s)
     setTimeout(() => {
       if (statusSpan.textContent === ' ⌛' && pendingConfirmations[destinatarioAtual] === statusSpan) {
         statusSpan.textContent = ' ⚠️';
@@ -334,12 +322,10 @@ function showContacts() {
       destinatarioAtual = c.username;
       document.getElementById('destinatario-label').textContent = 'Para: ' + c.username;
       document.getElementById('contacts-overlay').classList.remove('active');
-      // Zerar não lidas deste contato
       if (naoLidas[c.username]) {
         delete naoLidas[c.username];
         atualizarBadgeNaoLidas();
       }
-      // Solicitar histórico
       socket.emit('solicitar_historico', { contato: c.username });
     });
     listDiv.appendChild(item);
@@ -363,7 +349,6 @@ function logout() {
   naoLidas = {};
   pendingConfirmations = {};
   showScreen('login-screen');
-  // Reconectar
   socket.connect();
 }
 
