@@ -8,6 +8,7 @@
 </head>
 <body>
   <div id="app">
+    
     <!-- Tela de Login -->
     <div id="login-screen" class="screen active">
       <div class="logo-container">
@@ -44,7 +45,7 @@
       <div id="twofa-error" class="error"></div>
     </div>
 
-    <!-- Tela de Chat (idêntica) -->
+    <!-- Tela de Chat -->
     <div id="chat-screen" class="screen">
       <div class="top-bar">
         <button id="menu-btn" class="menu-btn">☰</button>
@@ -61,7 +62,7 @@
       <div id="typing-indicator"></div>
     </div>
 
-    <!-- Overlays (iguais) -->
+    <!-- Menu overlay -->
     <div id="menu-overlay" class="overlay">
       <div class="menu-content">
         <h3>Menu</h3>
@@ -73,6 +74,8 @@
         <button id="menu-close-btn">Fechar</button>
       </div>
     </div>
+
+    <!-- Configurações overlay -->
     <div id="config-overlay" class="overlay">
       <div class="menu-content">
         <h3>Configurações</h3>
@@ -81,6 +84,8 @@
         <button id="config-close-btn">Fechar</button>
       </div>
     </div>
+
+    <!-- Lista de contatos overlay -->
     <div id="contacts-overlay" class="overlay">
       <div class="contacts-content">
         <h3>Selecionar Destinatário</h3>
@@ -90,8 +95,9 @@
     </div>
   </div>
 
-  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsencrypt/3.3.2/jsencrypt.min.js"></script>
+  <!-- Bibliotecas locais (baixadas para a pasta static) -->
+  <script src="/static/socket.io.min.js"></script>
+  <script src="/static/jsencrypt.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
