@@ -29,7 +29,6 @@ SMTP_SERVER = 'smtp.gmail.com'
 SMTP_PORT = 587
 
 def enviar_email(destinatario, assunto, corpo):
-    """Envia um e-mail usando SMTP (Gmail)."""
     if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
         logger.error("Credenciais de e-mail não configuradas.")
         return False
@@ -95,8 +94,7 @@ usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
 
-# Armazenamento temporário dos códigos 2FA (em produção, use Redis)
-# Formato: { sid: { 'username': str, 'code': str, 'expires': datetime } }
+# Armazenamento temporário dos códigos 2FA
 pending_2fa = {}
 
 def gerar_codigo_2fa():
@@ -292,7 +290,6 @@ def handle_registro_credencial(data):
     if not username or not password_hash or not email:
         emit('registro_response', {'success': False, 'message': 'Dados incompletos'}, room=request.sid)
         return
-    # Validação simples de e-mail
     if '@' not in email or '.' not in email:
         emit('registro_response', {'success': False, 'message': 'E-mail inválido'}, room=request.sid)
         return
@@ -335,17 +332,14 @@ def handle_login_credencial(data):
         if not email:
             emit('login_response', {'success': False, 'message': 'E-mail não cadastrado'}, room=request.sid)
             return
-        # Gerar código 2FA e armazenar temporariamente
         codigo = gerar_codigo_2fa()
         pending_2fa[request.sid] = {
             'username': username,
             'code': codigo,
             'expires': datetime.now() + timedelta(minutes=10)
         }
-        # Enviar e-mail
         assunto = "HERMES - Código de Verificação"
         corpo = f"Seu código de verificação é: {codigo}\nEle expira em 10 minutos."
-        # O envio é feito em segundo plano para não bloquear
         threading.Thread(target=enviar_email, args=(email, assunto, corpo)).start()
         emit('login_response', {'success': True, 'awaiting_2fa': True, 'message': 'Código enviado'}, room=request.sid)
     else:
@@ -365,15 +359,12 @@ def handle_verify_2fa(data):
         emit('verify_2fa_response', {'success': False, 'message': 'Código incorreto'}, room=request.sid)
         return
 
-    # Código correto → login completo
     username = pending['username']
 
-    # Detecta IP do cliente
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     if ip and ',' in ip:
         ip = ip.split(',')[0].strip()
 
-    # Verifica mudança de IP
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT email, last_ip FROM usuarios WHERE username = %s', (username,))
@@ -381,11 +372,9 @@ def handle_verify_2fa(data):
     if user_info:
         email, last_ip = user_info
         if last_ip and last_ip != ip:
-            # Enviar alerta de novo login
             alerta_assunto = "HERMES - Novo login detectado"
             alerta_corpo = f"Um novo login foi realizado na sua conta a partir do IP {ip}.\nSe não foi você, altere sua senha imediatamente."
             threading.Thread(target=enviar_email, args=(email, alerta_assunto, alerta_corpo)).start()
-        # Atualiza IP
         cur.execute('UPDATE usuarios SET last_ip = %s WHERE username = %s', (ip, username))
         conn.commit()
     cur.close()
