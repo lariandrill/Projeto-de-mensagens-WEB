@@ -58,7 +58,11 @@ usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
 
-# --------------- Rota para o frontend ---------------
+# --------------- Rotas ---------------
+@app.route('/status')
+def status():
+    return jsonify({'status': 'online', 'usuarios_online': len(usuarios_online)})
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -275,7 +279,4 @@ def handle_login_credencial(data):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print('=' * 60)
-    print('SERVIDOR CHAT - HERMES WEB')
-    print('=' * 60)
     socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False)
