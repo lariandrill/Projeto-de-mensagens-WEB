@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>HERMES</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Tela de Login -->
+    <div id="login-screen" class="screen active">
+      <div class="logo">⚚ HERMES</div>
+      <input type="text" id="login-username" placeholder="Usuário" autocomplete="off">
+      <input type="password" id="login-password" placeholder="Senha">
+      <button id="login-btn">ENTRAR</button>
+      <button id="show-register-btn" class="secondary">CRIAR CONTA</button>
+      <div id="login-error" class="error"></div>
+      <div id="server-status">Verificando servidor...</div>
+    </div>
+
+    <!-- Tela de Registro -->
+    <div id="register-screen" class="screen">
+      <h2>CRIAR CONTA</h2>
+      <input type="text" id="reg-username" placeholder="Usuário" autocomplete="off">
+      <input type="password" id="reg-password" placeholder="Senha">
+      <input type="password" id="reg-confirm" placeholder="Confirmar senha">
+      <button id="register-btn">REGISTRAR</button>
+      <button id="show-login-btn" class="secondary">VOLTAR</button>
+      <div id="reg-error" class="error"></div>
+    </div>
+
+    <!-- Tela de Chat -->
+    <div id="chat-screen" class="screen">
+      <div class="top-bar">
+        <button id="menu-btn" class="menu-btn">☰</button>
+        <span id="status-led" class="led offline"></span>
+        <span id="status-text">Offline</span>
+        <span id="destinatario-label">Nenhum contato</span>
+        <button id="contacts-btn" class="secondary">SELECIONAR</button>
+      </div>
+      <div id="chat-messages" class="messages"></div>
+      <div class="input-area">
+        <input type="text" id="msg-input" placeholder="Digite sua mensagem..." autocomplete="off">
+        <button id="send-btn">ENVIAR</button>
+      </div>
+      <div id="typing-indicator"></div>
+    </div>
+
+    <!-- Menu overlay -->
+    <div id="menu-overlay" class="overlay">
+      <div class="menu-content">
+        <h3>Menu</h3>
+        <p id="menu-status"></p>
+        <button id="menu-contacts-btn">Selecionar contato</button>
+        <button id="menu-update-btn">Atualizar contatos</button>
+        <button id="menu-config-btn">Configurações</button>
+        <button id="menu-logout-btn">Logout</button>
+        <button id="menu-close-btn">Fechar</button>
+      </div>
+    </div>
+
+    <!-- Configurações overlay -->
+    <div id="config-overlay" class="overlay">
+      <div class="menu-content">
+        <h3>Configurações</h3>
+        <label><input type="checkbox" id="notificacoes-check" checked> Notificações</label>
+        <label><input type="checkbox" id="confirmacao-check" checked> Confirm. de leitura</label>
+        <button id="config-close-btn">Fechar</button>
+      </div>
+    </div>
+
+    <!-- Lista de contatos overlay -->
+    <div id="contacts-overlay" class="overlay">
+      <div class="contacts-content">
+        <h3>Selecionar Destinatário</h3>
+        <div id="contacts-list"></div>
+        <button id="contacts-close-btn">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsencrypt/3.3.2/jsencrypt.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
