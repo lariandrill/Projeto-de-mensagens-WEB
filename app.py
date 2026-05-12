@@ -7,10 +7,8 @@ from datetime import datetime, timedelta
 import os
 import logging
 import random
-import smtplib
+import requests
 import threading
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 import psycopg2
 from psycopg2 import IntegrityError
@@ -22,30 +20,33 @@ app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet',
                     logger=False, engineio_logger=False)
 
-# --------------- Configuração de e-mail ---------------
-EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
-EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
-SMTP_SERVER = 'smtp.gmail.com'
-SMTP_PORT = 587
+# --------------- Configuração de e-mail (Resend) ---------------
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 
 def enviar_email(destinatario, assunto, corpo):
-    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
-        logger.error("Credenciais de e-mail não configuradas.")
+    if not RESEND_API_KEY:
+        logger.error("RESEND_API_KEY não configurada.")
         return False
     try:
-        mensagem = MIMEMultipart()
-        mensagem['From'] = EMAIL_ADDRESS
-        mensagem['To'] = destinatario
-        mensagem['Subject'] = assunto
-        mensagem.attach(MIMEText(corpo, 'plain'))
-
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_ADDRESS, destinatario, mensagem.as_string())
-        server.quit()
-        logger.info(f"E-mail enviado para {destinatario}")
-        return True
+        response = requests.post(
+            'https://api.resend.com/emails',
+            headers={
+                'Authorization': f'Bearer {RESEND_API_KEY}',
+                'Content-Type': 'application/json'
+            },
+            json={
+                "from": "HERMES <no-reply@hermesapp.com>",
+                "to": [destinatario],
+                "subject": assunto,
+                "html": corpo.replace('\n', '<br>')
+            }
+        )
+        if response.status_code == 200:
+            logger.info(f"E-mail enviado para {destinatario}")
+            return True
+        else:
+            logger.error(f"Erro ao enviar e-mail: {response.status_code} {response.text}")
+            return False
     except Exception as e:
         logger.error(f"Erro ao enviar e-mail: {e}")
         return False
