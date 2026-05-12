@@ -28,12 +28,23 @@
       <input type="text" id="reg-username" placeholder="Usuário" autocomplete="off">
       <input type="password" id="reg-password" placeholder="Senha">
       <input type="password" id="reg-confirm" placeholder="Confirmar senha">
+      <input type="email" id="reg-email" placeholder="Seu melhor e-mail" autocomplete="off">
       <button id="register-btn">REGISTRAR</button>
       <button id="show-login-btn" class="secondary">VOLTAR</button>
       <div id="reg-error" class="error"></div>
     </div>
 
-    <!-- Tela de Chat -->
+    <!-- Tela de Verificação 2FA -->
+    <div id="twofa-screen" class="screen">
+      <h2>Verificação em Duas Etapas</h2>
+      <p>Um código foi enviado para o seu e-mail.</p>
+      <input type="text" id="twofa-code" placeholder="Digite o código de 6 dígitos" maxlength="6" inputmode="numeric">
+      <button id="twofa-btn">VERIFICAR</button>
+      <button id="twofa-cancel-btn" class="secondary">CANCELAR</button>
+      <div id="twofa-error" class="error"></div>
+    </div>
+
+    <!-- Tela de Chat (idêntica) -->
     <div id="chat-screen" class="screen">
       <div class="top-bar">
         <button id="menu-btn" class="menu-btn">☰</button>
@@ -50,7 +61,7 @@
       <div id="typing-indicator"></div>
     </div>
 
-    <!-- Menu overlay -->
+    <!-- Overlays (iguais) -->
     <div id="menu-overlay" class="overlay">
       <div class="menu-content">
         <h3>Menu</h3>
@@ -62,8 +73,6 @@
         <button id="menu-close-btn">Fechar</button>
       </div>
     </div>
-
-    <!-- Configurações overlay -->
     <div id="config-overlay" class="overlay">
       <div class="menu-content">
         <h3>Configurações</h3>
@@ -72,8 +81,6 @@
         <button id="config-close-btn">Fechar</button>
       </div>
     </div>
-
-    <!-- Lista de contatos overlay -->
     <div id="contacts-overlay" class="overlay">
       <div class="contacts-content">
         <h3>Selecionar Destinatário</h3>
