@@ -1,4 +1,4 @@
-// ---------- Variáveis ----------
+// ---------- Variáveis globais ----------
 let socket = null;
 let username = null;
 let pubKey = null;
@@ -10,12 +10,17 @@ let typingTimer = null;
 let naoLidas = {};
 let pendingConfirmations = {};
 
+// ---------- Inicialização ----------
 window.onload = function() {
   socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
   setupSocketListeners();
   setupUI();
   checkServerStatus();
   setInterval(checkServerStatus, 15000);
+
+  if (window.Notification && Notification.permission !== 'granted') {
+    Notification.requestPermission();
+  }
 };
 
 function setupUI() {
@@ -46,7 +51,6 @@ function setupUI() {
   if (saved.confirmacao !== undefined) document.getElementById('confirmacao-check').checked = saved.confirmacao;
 }
 
-// funções de tela
 function showScreen(id) { document.querySelectorAll('.screen').forEach(el => el.classList.remove('active')); document.getElementById(id).classList.add('active'); }
 function showRegister() { showScreen('register-screen'); }
 function showLogin() { showScreen('login-screen'); }
@@ -59,24 +63,18 @@ function showError(msg, isReg = false) {
 }
 
 function checkServerStatus() {
-  fetch('/status')
-    .then(r => r.json())
-    .then(d => {
-      document.getElementById('server-status').textContent = d.status === 'online' ? 'Servidor online' : 'Servidor offline';
-      document.getElementById('server-status').style.color = d.status === 'online' ? '#0f0' : '#f00';
-    })
-    .catch(() => {
-      document.getElementById('server-status').textContent = 'Servidor offline';
-      document.getElementById('server-status').style.color = '#f00';
-    });
+  fetch('/status').then(r => r.json()).then(d => {
+    document.getElementById('server-status').textContent = d.status === 'online' ? 'Servidor online' : 'Servidor offline';
+    document.getElementById('server-status').style.color = d.status === 'online' ? '#0f0' : '#f00';
+  }).catch(() => {
+    document.getElementById('server-status').textContent = 'Servidor offline';
+    document.getElementById('server-status').style.color = '#f00';
+  });
 }
 
-// ---------- Criptografia ----------
-async function sha256(message) {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+// ---------- Criptografia (CryptoJS síncrono) ----------
+function sha256(message) {
+  return CryptoJS.SHA256(message).toString();
 }
 
 function gerarParChaves() {
@@ -96,7 +94,6 @@ function descriptografar(texto, priv) {
   return crypt.decrypt(texto);
 }
 
-// ---------- Badge ----------
 function atualizarBadgeNaoLidas() {
   const total = Object.values(naoLidas).reduce((a, b) => a + b, 0);
   const btn = document.getElementById('contacts-btn');
@@ -109,21 +106,16 @@ function atualizarBadgeNaoLidas() {
   }
 }
 
-// ---------- Autenticação com try/catch ----------
-async function login() {
+// ---------- Autenticação ----------
+function login() {
   const u = document.getElementById('login-username').value.trim();
   const p = document.getElementById('login-password').value.trim();
   if (!u || !p) { showError('Preencha todos os campos!'); return; }
-  try {
-    const hash = await sha256(p);
-    socket.emit('login_usuario', { username: u, password_hash: hash });
-  } catch (e) {
-    showError('Erro ao processar senha.');
-    console.error(e);
-  }
+  const hash = sha256(p);
+  socket.emit('login_usuario', { username: u, password_hash: hash });
 }
 
-async function register() {
+function register() {
   const u = document.getElementById('reg-username').value.trim();
   const p = document.getElementById('reg-password').value.trim();
   const c = document.getElementById('reg-confirm').value.trim();
@@ -131,15 +123,11 @@ async function register() {
   if (!u || !p || !c || !e) { showError('Preencha todos os campos!', true); return; }
   if (p !== c) { showError('Senhas não coincidem!', true); return; }
   if (!e.includes('@') || !e.includes('.')) { showError('E-mail inválido', true); return; }
-  try {
-    const hash = await sha256(p);
-    socket.emit('registrar_usuario_credencial', { username: u, password_hash: hash, email: e });
-  } catch (e) {
-    showError('Erro ao processar senha.', true);
-    console.error(e);
-  }
+  const hash = sha256(p);
+  socket.emit('registrar_usuario_credencial', { username: u, password_hash: hash, email: e });
 }
 
+// ---------- 2FA ----------
 function verify2FA() {
   const code = document.getElementById('twofa-code').value.trim();
   if (code.length !== 6) {
@@ -169,6 +157,7 @@ function setupSocketListeners() {
     document.getElementById('status-led').className = 'led offline';
     document.getElementById('status-text').textContent = 'Offline';
   });
+
   socket.on('login_response', (data) => {
     if (data.success) {
       if (data.awaiting_2fa) {
@@ -181,6 +170,7 @@ function setupSocketListeners() {
       showError(data.message || 'Erro no login');
     }
   });
+
   socket.on('registro_response', (data) => {
     if (data.success) {
       showLogin();
@@ -189,6 +179,7 @@ function setupSocketListeners() {
       showError(data.message || 'Erro no registro', true);
     }
   });
+
   socket.on('verify_2fa_response', (data) => {
     if (data.success) {
       finalizarLogin(data.username);
@@ -196,12 +187,13 @@ function setupSocketListeners() {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
     }
   });
-  // (demais listeners para message, historico, digitando, delivery_confirmation, lista_contatos – manter os já existentes)
+
   socket.on('lista_contatos', (contatos) => {
     todosContatos = contatos;
     contatos.forEach(c => { if (c.public_key && c.username !== username) chavesAmigos[c.username] = c.public_key; });
     atualizarBadgeNaoLidas();
   });
+
   socket.on('message', (data) => {
     let from = data.from, content = data.content, texto = content;
     if (privKey && content) { try { const dec = descriptografar(content, privKey); if (dec) texto = dec; } catch(e) {} }
@@ -217,6 +209,7 @@ function setupSocketListeners() {
       }
     }
   });
+
   socket.on('historico_mensagens', (data) => {
     document.getElementById('chat-messages').innerHTML = '';
     data.mensagens.forEach(msg => {
@@ -225,6 +218,7 @@ function setupSocketListeners() {
       addMessage((msg.from === username ? 'Você' : msg.from) + ': ' + texto, msg.from === username ? 'right' : 'left');
     });
   });
+
   socket.on('digitando', (data) => {
     if (data.from === destinatarioAtual) {
       document.getElementById('typing-indicator').textContent = data.from + ' está digitando...';
@@ -232,6 +226,7 @@ function setupSocketListeners() {
       typingTimer = setTimeout(() => { document.getElementById('typing-indicator').textContent = ''; }, 2000);
     }
   });
+
   socket.on('delivery_confirmation', (data) => {
     const { to, from, status } = data;
     if (from === username && pendingConfirmations[to]) {
@@ -246,7 +241,7 @@ function setupSocketListeners() {
   });
 }
 
-// ---------- UI mensagens ----------
+// ---------- UI ----------
 function addMessage(texto, lado, isTemp = false) {
   const div = document.createElement('div');
   div.className = 'message ' + lado;
