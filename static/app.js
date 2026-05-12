@@ -10,19 +10,45 @@ let typingTimer = null;
 let naoLidas = {};
 let pendingConfirmations = {};
 
-// ---------- Inicialização ----------
-window.onload = function() {
-  socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
-  setupSocketListeners();
-  setupUI();
-  checkServerStatus();
-  setInterval(checkServerStatus, 15000);
+// ---------- Inicialização defensiva ----------
+document.addEventListener('DOMContentLoaded', function () {
+  console.log('1. DOM pronto. Iniciando app...');
+  try {
+    // Verificar se io, JSEncrypt e CryptoJS existem
+    if (typeof io === 'undefined') {
+      console.error('Socket.IO não carregado! Verifique /static/socket.io.min.js');
+      return;
+    }
+    if (typeof JSEncrypt === 'undefined') {
+      console.error('JSEncrypt não carregado! Verifique /static/jsencrypt.min.js');
+      return;
+    }
+    if (typeof CryptoJS === 'undefined') {
+      console.error('CryptoJS não carregado! Verifique /static/crypto-js.min.js');
+      return;
+    }
 
-  if (window.Notification && Notification.permission !== 'granted') {
-    Notification.requestPermission();
+    socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
+    console.log('2. Socket criado.');
+
+    setupSocketListeners();
+    console.log('3. Socket listeners definidos.');
+
+    setupUI();
+    console.log('4. UI configurada.');
+
+    checkServerStatus();
+    setInterval(checkServerStatus, 15000);
+
+    if (window.Notification && Notification.permission !== 'granted') {
+      Notification.requestPermission();
+    }
+  } catch (e) {
+    console.error('Erro na inicialização:', e);
   }
-};
+});
 
+// ---------- UI ----------
 function setupUI() {
   document.getElementById('login-btn').addEventListener('click', login);
   document.getElementById('show-register-btn').addEventListener('click', showRegister);
