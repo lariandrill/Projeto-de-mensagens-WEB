@@ -8,6 +8,10 @@ let chavesAmigos = {};      // { username: publicKeyPEM }
 let todosContatos = [];
 let typingTimer = null;
 
+// Controle de mensagens não lidas e status de entrega
+let naoLidas = {};                    // { username: count }
+let pendingConfirmations = {};        // { username: DOMElement }
+
 // ---------- Inicialização ----------
 window.onload = function() {
   socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
@@ -44,6 +48,11 @@ function setupUI() {
   // Checkbox de configurações
   document.getElementById('notificacoes-check').addEventListener('change', saveConfig);
   document.getElementById('confirmacao-check').addEventListener('change', saveConfig);
+
+  // Carregar configurações salvas
+  const saved = JSON.parse(localStorage.getItem('hermes_config') || '{}');
+  if (saved.notificacoes !== undefined) document.getElementById('notificacoes-check').checked = saved.notificacoes;
+  if (saved.confirmacao !== undefined) document.getElementById('confirmacao-check').checked = saved.confirmacao;
 }
 
 function showScreen(screenId) {
@@ -93,6 +102,19 @@ function descriptografar(textoCifrado, privateKeyPEM) {
   const crypt = new JSEncrypt();
   crypt.setPrivateKey(privateKeyPEM);
   return crypt.decrypt(textoCifrado);
+}
+
+// ---------- Badge de mensagens não lidas ----------
+function atualizarBadgeNaoLidas() {
+  const total = Object.values(naoLidas).reduce((sum, val) => sum + val, 0);
+  const btn = document.getElementById('contacts-btn');
+  if (total > 0) {
+    btn.textContent = `SELECIONAR (${total})`;
+    btn.style.background = '#c80';  // laranja
+  } else {
+    btn.textContent = 'SELECIONAR';
+    btn.style.background = '#36c';  // azul original
+  }
 }
 
 // ---------- Autenticação ----------
@@ -157,7 +179,8 @@ function setupSocketListeners() {
         chavesAmigos[c.username] = c.public_key;
       }
     });
-    // Atualizar badge no botão de contatos (não implementado visualmente aqui, mas pode ser feito)
+    // Atualizar badge 
+    atualizarBadgeNaoLidas();
   });
 
   socket.on('message', (data) => {
@@ -176,6 +199,11 @@ function setupSocketListeners() {
       addMessage(from + ': ' + texto, 'left');
       socket.emit('marcar_lida', { contato: from });
     } else {
+      // Incrementar contagem de não lidas
+      if (!naoLidas[from]) naoLidas[from] = 0;
+      naoLidas[from]++;
+      atualizarBadgeNaoLidas();
+
       // Notificação visual
       if (document.getElementById('notificacoes-check').checked && window.Notification && Notification.permission === 'granted') {
         new Notification(from, { body: texto.substring(0, 100), icon: '/static/icon.png' });
@@ -212,15 +240,59 @@ function setupSocketListeners() {
     }
   });
 
+  // ---------- Confirmação de entrega ----------
   socket.on('delivery_confirmation', (data) => {
+    const { to, from, status } = data;
+    if (from === username && pendingConfirmations[to]) {
+      const statusEl = pendingConfirmations[to];
+      switch (status) {
+        case 'delivered':
+          statusEl.textContent = ' ✓';
+          statusEl.style.color = '#0f0';
+          break;
+        case 'stored_offline':
+          statusEl.textContent = ' ⏳';
+          statusEl.style.color = '#ff0';
+          break;
+        case 'failed':
+          statusEl.textContent = ' ✗';
+          statusEl.style.color = '#f00';
+          break;
+      }
+      delete pendingConfirmations[to];
+    }
   });
 }
 
 // ---------- Funções da UI ----------
-function addMessage(texto, lado) {
+function addMessage(texto, lado, isTemp = false) {
   const div = document.createElement('div');
   div.className = 'message ' + lado;
-  div.textContent = texto;
+  if (lado === 'right' && isTemp) {
+    const textSpan = document.createElement('span');
+    textSpan.textContent = texto;
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'msg-status';
+    statusSpan.textContent = ' ⌛';
+    statusSpan.style.marginLeft = '5px';
+    statusSpan.style.fontSize = '0.8em';
+    div.appendChild(textSpan);
+    div.appendChild(statusSpan);
+    // Guardar referência para atualização futura
+    if (destinatarioAtual) {
+      pendingConfirmations[destinatarioAtual] = statusSpan;
+    }
+    // Timeout para caso não receba confirmação (30s)
+    setTimeout(() => {
+      if (statusSpan.textContent === ' ⌛' && pendingConfirmations[destinatarioAtual] === statusSpan) {
+        statusSpan.textContent = ' ⚠️';
+        statusSpan.style.color = '#f80';
+        delete pendingConfirmations[destinatarioAtual];
+      }
+    }, 30000);
+  } else {
+    div.textContent = texto;
+  }
   document.getElementById('chat-messages').appendChild(div);
   div.scrollIntoView({ behavior: 'smooth' });
 }
@@ -232,7 +304,7 @@ function sendMessage() {
   const chaveDest = chavesAmigos[destinatarioAtual];
   const conteudo = chaveDest ? criptografar(texto, chaveDest) : texto;
   socket.emit('message', { to: destinatarioAtual, from: username, content: conteudo });
-  addMessage('Você: ' + texto, 'right');
+  addMessage('Você: ' + texto, 'right', true);
   input.value = '';
 }
 
@@ -262,6 +334,11 @@ function showContacts() {
       destinatarioAtual = c.username;
       document.getElementById('destinatario-label').textContent = 'Para: ' + c.username;
       document.getElementById('contacts-overlay').classList.remove('active');
+      // Zerar não lidas deste contato
+      if (naoLidas[c.username]) {
+        delete naoLidas[c.username];
+        atualizarBadgeNaoLidas();
+      }
       // Solicitar histórico
       socket.emit('solicitar_historico', { contato: c.username });
     });
@@ -283,13 +360,14 @@ function logout() {
   destinatarioAtual = null;
   chavesAmigos = {};
   todosContatos = [];
+  naoLidas = {};
+  pendingConfirmations = {};
   showScreen('login-screen');
   // Reconectar
   socket.connect();
 }
 
 function saveConfig() {
-  // Salvar configurações localmente
   localStorage.setItem('hermes_config', JSON.stringify({
     notificacoes: document.getElementById('notificacoes-check').checked,
     confirmacao: document.getElementById('confirmacao-check').checked
