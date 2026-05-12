@@ -3,9 +3,15 @@ eventlet.monkey_patch()
 
 from flask import Flask, jsonify, request, render_template
 from flask_socketio import SocketIO, emit
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import logging
+import random
+import smtplib
+import threading
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 import psycopg2
 from psycopg2 import IntegrityError
 
@@ -15,6 +21,35 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet',
                     logger=False, engineio_logger=False)
+
+# --------------- Configuração de e-mail ---------------
+EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
+EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+SMTP_SERVER = 'smtp.gmail.com'
+SMTP_PORT = 587
+
+def enviar_email(destinatario, assunto, corpo):
+    """Envia um e-mail usando SMTP (Gmail)."""
+    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
+        logger.error("Credenciais de e-mail não configuradas.")
+        return False
+    try:
+        mensagem = MIMEMultipart()
+        mensagem['From'] = EMAIL_ADDRESS
+        mensagem['To'] = destinatario
+        mensagem['Subject'] = assunto
+        mensagem.attach(MIMEText(corpo, 'plain'))
+
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_ADDRESS, destinatario, mensagem.as_string())
+        server.quit()
+        logger.info(f"E-mail enviado para {destinatario}")
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao enviar e-mail: {e}")
+        return False
 
 # --------------- Banco de dados ---------------
 def get_db_connection():
@@ -33,6 +68,8 @@ def init_db():
             username TEXT PRIMARY KEY,
             password_hash TEXT NOT NULL,
             public_key TEXT,
+            email TEXT UNIQUE,
+            last_ip TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -57,6 +94,13 @@ init_db()
 usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
+
+# Armazenamento temporário dos códigos 2FA (em produção, use Redis)
+# Formato: { sid: { 'username': str, 'code': str, 'expires': datetime } }
+pending_2fa = {}
+
+def gerar_codigo_2fa():
+    return str(random.randint(100000, 999999))
 
 # --------------- Rotas ---------------
 @app.route('/status')
@@ -239,26 +283,40 @@ def handle_marcar_lida(data):
     cur.close()
     conn.close()
 
+# --------------- Registro com e-mail ---------------
 @socketio.on('registrar_usuario_credencial')
 def handle_registro_credencial(data):
     username = data.get('username')
     password_hash = data.get('password_hash')
-    if not username or not password_hash:
+    email = data.get('email')
+    if not username or not password_hash or not email:
         emit('registro_response', {'success': False, 'message': 'Dados incompletos'}, room=request.sid)
         return
+    # Validação simples de e-mail
+    if '@' not in email or '.' not in email:
+        emit('registro_response', {'success': False, 'message': 'E-mail inválido'}, room=request.sid)
+        return
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute('INSERT INTO usuarios (username, password_hash) VALUES (%s, %s)', (username, password_hash))
+        cur.execute('INSERT INTO usuarios (username, password_hash, email) VALUES (%s, %s, %s)',
+                    (username, password_hash, email))
         conn.commit()
         emit('registro_response', {'success': True, 'message': 'Usuário criado'}, room=request.sid)
-    except IntegrityError:
+    except IntegrityError as e:
         conn.rollback()
-        emit('registro_response', {'success': False, 'message': 'Usuário já existe'}, room=request.sid)
+        if 'usuarios_username_key' in str(e):
+            emit('registro_response', {'success': False, 'message': 'Usuário já existe'}, room=request.sid)
+        elif 'usuarios_email_key' in str(e):
+            emit('registro_response', {'success': False, 'message': 'E-mail já cadastrado'}, room=request.sid)
+        else:
+            emit('registro_response', {'success': False, 'message': 'Erro ao criar conta'}, room=request.sid)
     finally:
         cur.close()
         conn.close()
 
+# --------------- Login com 2FA ---------------
 @socketio.on('login_usuario')
 def handle_login_credencial(data):
     username = data.get('username')
@@ -268,15 +326,77 @@ def handle_login_credencial(data):
         return
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT password_hash FROM usuarios WHERE username = %s', (username,))
+    cur.execute('SELECT password_hash, email FROM usuarios WHERE username = %s', (username,))
     row = cur.fetchone()
     cur.close()
     conn.close()
     if row and row[0] == password_hash:
-        emit('login_response', {'success': True, 'username': username, 'message': 'OK'}, room=request.sid)
+        email = row[1]
+        if not email:
+            emit('login_response', {'success': False, 'message': 'E-mail não cadastrado'}, room=request.sid)
+            return
+        # Gerar código 2FA e armazenar temporariamente
+        codigo = gerar_codigo_2fa()
+        pending_2fa[request.sid] = {
+            'username': username,
+            'code': codigo,
+            'expires': datetime.now() + timedelta(minutes=10)
+        }
+        # Enviar e-mail
+        assunto = "HERMES - Código de Verificação"
+        corpo = f"Seu código de verificação é: {codigo}\nEle expira em 10 minutos."
+        # O envio é feito em segundo plano para não bloquear
+        threading.Thread(target=enviar_email, args=(email, assunto, corpo)).start()
+        emit('login_response', {'success': True, 'awaiting_2fa': True, 'message': 'Código enviado'}, room=request.sid)
     else:
         emit('login_response', {'success': False, 'message': 'Usuário ou senha incorretos'}, room=request.sid)
 
+@socketio.on('verify_2fa')
+def handle_verify_2fa(data):
+    code = data.get('code')
+    pending = pending_2fa.pop(request.sid, None)
+    if not pending:
+        emit('verify_2fa_response', {'success': False, 'message': 'Nenhuma solicitação pendente'}, room=request.sid)
+        return
+    if datetime.now() > pending['expires']:
+        emit('verify_2fa_response', {'success': False, 'message': 'Código expirado'}, room=request.sid)
+        return
+    if code != pending['code']:
+        emit('verify_2fa_response', {'success': False, 'message': 'Código incorreto'}, room=request.sid)
+        return
+
+    # Código correto → login completo
+    username = pending['username']
+
+    # Detecta IP do cliente
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if ip and ',' in ip:
+        ip = ip.split(',')[0].strip()
+
+    # Verifica mudança de IP
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT email, last_ip FROM usuarios WHERE username = %s', (username,))
+    user_info = cur.fetchone()
+    if user_info:
+        email, last_ip = user_info
+        if last_ip and last_ip != ip:
+            # Enviar alerta de novo login
+            alerta_assunto = "HERMES - Novo login detectado"
+            alerta_corpo = f"Um novo login foi realizado na sua conta a partir do IP {ip}.\nSe não foi você, altere sua senha imediatamente."
+            threading.Thread(target=enviar_email, args=(email, alerta_assunto, alerta_corpo)).start()
+        # Atualiza IP
+        cur.execute('UPDATE usuarios SET last_ip = %s WHERE username = %s', (ip, username))
+        conn.commit()
+    cur.close()
+    conn.close()
+
+    emit('verify_2fa_response', {'success': True, 'username': username, 'message': 'OK'}, room=request.sid)
+
+# --------------- Execução ---------------
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    print('=' * 60)
+    print('SERVIDOR CHAT - HERMES WEB (com 2FA)')
+    print('=' * 60)
     socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False)
