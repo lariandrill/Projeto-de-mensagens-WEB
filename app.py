@@ -67,11 +67,16 @@ def init_db():
             username TEXT PRIMARY KEY,
             password_hash TEXT NOT NULL,
             public_key TEXT,
-            email TEXT UNIQUE,
             last_ip TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Adiciona a coluna 'email' se ela ainda não existir
+    try:
+        cur.execute('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email TEXT UNIQUE')
+    except Exception as e:
+        logger.warning(f"Não foi possível adicionar a coluna email (pode já existir): {e}")
+    conn.commit()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS mensagens (
             id SERIAL PRIMARY KEY,
@@ -86,7 +91,7 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-    logger.info("Banco de dados inicializado.")
+    logger.info("Banco de dados inicializado/atualizado.")
 
 init_db()
 
