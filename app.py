@@ -20,25 +20,26 @@ app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet',
                     logger=False, engineio_logger=False)
 
-# --------------- Configuração de e-mail (Resend) ---------------
-RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+# --------------- Configuração de e-mail (Mailjet) ---------------
+MAILJET_API_KEY = os.environ.get('MAILJET_API_KEY')
+MAILJET_SECRET_KEY = os.environ.get('MAILJET_SECRET_KEY')
+FROM_EMAIL = os.environ.get('FROM_EMAIL')
 
 def enviar_email(destinatario, assunto, corpo):
-    if not RESEND_API_KEY:
-        logger.error("RESEND_API_KEY não configurada.")
+    if not MAILJET_API_KEY or not MAILJET_SECRET_KEY or not FROM_EMAIL:
+        logger.error("Credenciais do Mailjet não configuradas.")
         return False
     try:
         response = requests.post(
-            'https://api.resend.com/emails',
-            headers={
-                'Authorization': f'Bearer {RESEND_API_KEY}',
-                'Content-Type': 'application/json'
-            },
+            'https://api.mailjet.com/v3.1/send',
+            auth=(MAILJET_API_KEY, MAILJET_SECRET_KEY),
             json={
-                "from": "HERMES <no-reply@hermesapp.com>",
-                "to": [destinatario],
-                "subject": assunto,
-                "html": corpo.replace('\n', '<br>')
+                'Messages': [{
+                    "From": {"Email": FROM_EMAIL, "Name": "HERMES"},
+                    "To": [{"Email": destinatario}],
+                    "Subject": assunto,
+                    "HTMLPart": corpo.replace('\n', '<br>')
+                }]
             }
         )
         if response.status_code == 200:
@@ -72,7 +73,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Adiciona a coluna 'email' se ela ainda não existir
     try:
         cur.execute('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email TEXT UNIQUE')
     except Exception as e:
@@ -99,8 +99,6 @@ init_db()
 usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
-
-# Armazenamento temporário dos códigos 2FA
 pending_2fa = {}
 
 def gerar_codigo_2fa():
