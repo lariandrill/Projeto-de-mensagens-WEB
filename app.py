@@ -73,10 +73,12 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    try:
-        cur.execute('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email TEXT UNIQUE')
-    except Exception as e:
-        logger.warning(f"Não foi possível adicionar a coluna email (pode já existir): {e}")
+    # Adiciona colunas que podem não existir em migrações anteriores
+    for col in ['email', 'last_ip']:
+        try:
+            cur.execute(f'ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {col} TEXT')
+        except Exception as e:
+            logger.warning(f"Não foi possível adicionar a coluna {col}: {e}")
     conn.commit()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS mensagens (
@@ -369,20 +371,24 @@ def handle_verify_2fa(data):
     if ip and ',' in ip:
         ip = ip.split(',')[0].strip()
 
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('SELECT email, last_ip FROM usuarios WHERE username = %s', (username,))
-    user_info = cur.fetchone()
-    if user_info:
-        email, last_ip = user_info
-        if last_ip and last_ip != ip:
-            alerta_assunto = "HERMES - Novo login detectado"
-            alerta_corpo = f"Um novo login foi realizado na sua conta a partir do IP {ip}.\nSe não foi você, altere sua senha imediatamente."
-            threading.Thread(target=enviar_email, args=(email, alerta_assunto, alerta_corpo)).start()
-        cur.execute('UPDATE usuarios SET last_ip = %s WHERE username = %s', (ip, username))
-        conn.commit()
-    cur.close()
-    conn.close()
+    # Atualiza IP e envia alerta de novo login (se possível)
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT email, last_ip FROM usuarios WHERE username = %s', (username,))
+        user_info = cur.fetchone()
+        if user_info:
+            email, last_ip = user_info
+            if last_ip and last_ip != ip:
+                alerta_assunto = "HERMES - Novo login detectado"
+                alerta_corpo = f"Um novo login foi realizado na sua conta a partir do IP {ip}.\nSe não foi você, altere sua senha imediatamente."
+                threading.Thread(target=enviar_email, args=(email, alerta_assunto, alerta_corpo)).start()
+            cur.execute('UPDATE usuarios SET last_ip = %s WHERE username = %s', (ip, username))
+            conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Erro ao atualizar IP: {e}")
 
     emit('verify_2fa_response', {'success': True, 'username': username, 'message': 'OK'}, room=request.sid)
 
