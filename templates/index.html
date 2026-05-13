@@ -39,8 +39,8 @@
       <h2>Verificação em Duas Etapas</h2>
       <p>Um código foi enviado para o seu e-mail.</p>
       <input type="text" id="twofa-code" placeholder="Digite o código de 6 dígitos" maxlength="6" inputmode="numeric">
-      <button id="twofa-btn">VERIFICAR</button>
-      <button id="twofa-cancel-btn" class="secondary">CANCELAR</button>
+      <button id="twofa-btn" onclick="verify2FA()">VERIFICAR</button>
+      <button id="twofa-cancel-btn" class="secondary" onclick="showLogin()">CANCELAR</button>
       <div id="twofa-error" class="error"></div>
     </div>
 
