@@ -10,23 +10,16 @@ let typingTimer = null;
 let naoLidas = {};
 let pendingConfirmations = {};
 
+// Variável temporária para 2FA
+let tempUsername = null;
+
 // ---------- Inicialização defensiva ----------
 document.addEventListener('DOMContentLoaded', function () {
   console.log('1. DOM pronto. Iniciando app...');
   try {
-    // Verificar se io, JSEncrypt e CryptoJS existem
-    if (typeof io === 'undefined') {
-      console.error('Socket.IO não carregado! Verifique /static/socket.io.min.js');
-      return;
-    }
-    if (typeof JSEncrypt === 'undefined') {
-      console.error('JSEncrypt não carregado! Verifique /static/jsencrypt.min.js');
-      return;
-    }
-    if (typeof CryptoJS === 'undefined') {
-      console.error('CryptoJS não carregado! Verifique /static/crypto-js.min.js');
-      return;
-    }
+    if (typeof io === 'undefined') { console.error('Socket.IO não carregado!'); return; }
+    if (typeof JSEncrypt === 'undefined') { console.error('JSEncrypt não carregado!'); return; }
+    if (typeof CryptoJS === 'undefined') { console.error('CryptoJS não carregado!'); return; }
 
     socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
     console.log('2. Socket criado.');
@@ -67,7 +60,6 @@ function setupUI() {
   document.getElementById('contacts-close-btn').addEventListener('click', () => {
     document.getElementById('contacts-overlay').classList.remove('active');
   });
-  // O botão twofa-btn agora usa onclick no HTML, mas mantemos um listener também (não causa problema)
   document.getElementById('twofa-btn').addEventListener('click', verify2FA);
   document.getElementById('twofa-cancel-btn').addEventListener('click', () => showLogin());
   document.getElementById('notificacoes-check').addEventListener('change', saveConfig);
@@ -100,37 +92,16 @@ function checkServerStatus() {
 }
 
 // ---------- Criptografia (CryptoJS síncrono) ----------
-function sha256(message) {
-  return CryptoJS.SHA256(message).toString();
-}
-
-function gerarParChaves() {
-  const crypt = new JSEncrypt({ default_key_size: 1024 });
-  return { publicKey: crypt.getPublicKey(), privateKey: crypt.getPrivateKey() };
-}
-
-function criptografar(texto, pub) {
-  const crypt = new JSEncrypt();
-  crypt.setPublicKey(pub);
-  return crypt.encrypt(texto);
-}
-
-function descriptografar(texto, priv) {
-  const crypt = new JSEncrypt();
-  crypt.setPrivateKey(priv);
-  return crypt.decrypt(texto);
-}
+function sha256(message) { return CryptoJS.SHA256(message).toString(); }
+function gerarParChaves() { const crypt = new JSEncrypt({ default_key_size: 1024 }); return { publicKey: crypt.getPublicKey(), privateKey: crypt.getPrivateKey() }; }
+function criptografar(texto, pub) { const crypt = new JSEncrypt(); crypt.setPublicKey(pub); return crypt.encrypt(texto); }
+function descriptografar(texto, priv) { const crypt = new JSEncrypt(); crypt.setPrivateKey(priv); return crypt.decrypt(texto); }
 
 function atualizarBadgeNaoLidas() {
   const total = Object.values(naoLidas).reduce((a, b) => a + b, 0);
   const btn = document.getElementById('contacts-btn');
-  if (total > 0) {
-    btn.textContent = `SELECIONAR (${total})`;
-    btn.style.background = '#c80';
-  } else {
-    btn.textContent = 'SELECIONAR';
-    btn.style.background = '#36c';
-  }
+  if (total > 0) { btn.textContent = `SELECIONAR (${total})`; btn.style.background = '#c80'; }
+  else { btn.textContent = 'SELECIONAR'; btn.style.background = '#36c'; }
 }
 
 // ---------- Autenticação ----------
@@ -138,6 +109,7 @@ function login() {
   const u = document.getElementById('login-username').value.trim();
   const p = document.getElementById('login-password').value.trim();
   if (!u || !p) { showError('Preencha todos os campos!'); return; }
+  tempUsername = u;  // armazena o nome de usuário para o 2FA
   const hash = sha256(p);
   socket.emit('login_usuario', { username: u, password_hash: hash });
 }
@@ -161,10 +133,13 @@ function verify2FA() {
     document.getElementById('twofa-error').textContent = 'Código deve ter 6 dígitos';
     return;
   }
-  // Emite o evento de verificação e aguarda a resposta usando socket.once para capturar a resposta uma vez
-  socket.emit('verify_2fa', { code: code });
+  if (!tempUsername) {
+    document.getElementById('twofa-error').textContent = 'Erro: usuário não encontrado. Refaça o login.';
+    return;
+  }
+  socket.emit('verify_2fa', { code: code, username: tempUsername });
   socket.once('verify_2fa_response', (data) => {
-    // Exibe a resposta do servidor via alerta (depuração)
+    // Exibe a resposta do servidor (depuração)
     alert('Resposta do servidor: ' + JSON.stringify(data));
     if (data.success) {
       finalizarLogin(data.username);
@@ -176,6 +151,7 @@ function verify2FA() {
 
 function finalizarLogin(user) {
   username = user;
+  tempUsername = null;  // limpa a variável temporária
   const keys = gerarParChaves();
   pubKey = keys.publicKey;
   privKey = keys.privateKey;
@@ -209,18 +185,12 @@ function setupSocketListeners() {
   });
 
   socket.on('registro_response', (data) => {
-    if (data.success) {
-      showLogin();
-      alert('Conta criada! Faça login.');
-    } else {
-      showError(data.message || 'Erro no registro', true);
-    }
+    if (data.success) { showLogin(); alert('Conta criada! Faça login.'); }
+    else { showError(data.message || 'Erro no registro', true); }
   });
 
-  // Removido o listener anterior de verify_2fa_response, pois agora é tratado em verify2FA() via socket.once
-  // Se o socket.once falhar (ex.: evento recebido antes do once), mantemos um fallback no listener permanente
+  // Fallback para verificação 2FA (caso o socket.once não capture)
   socket.on('verify_2fa_response', (data) => {
-    // Fallback: se o once não foi usado (raro), tratamos aqui
     if (!data.success) {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
     }
