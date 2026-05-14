@@ -9,8 +9,6 @@ let todosContatos = [];
 let typingTimer = null;
 let naoLidas = {};
 let pendingConfirmations = {};
-
-// Variável temporária para 2FA
 let tempUsername = null;
 
 // ---------- Gerenciamento de dispositivo ----------
@@ -27,7 +25,7 @@ function getDeviceId() {
   return deviceId;
 }
 
-// ---------- Inicialização defensiva ----------
+// ---------- Inicialização ----------
 document.addEventListener('DOMContentLoaded', function () {
   console.log('1. DOM pronto. Iniciando app...');
   try {
@@ -105,7 +103,7 @@ function checkServerStatus() {
   });
 }
 
-// ---------- Criptografia (CryptoJS síncrono) ----------
+// ---------- Criptografia ----------
 function sha256(message) { return CryptoJS.SHA256(message).toString(); }
 function gerarParChaves() { const crypt = new JSEncrypt({ default_key_size: 1024 }); return { publicKey: crypt.getPublicKey(), privateKey: crypt.getPrivateKey() }; }
 function criptografar(texto, pub) { const crypt = new JSEncrypt(); crypt.setPublicKey(pub); return crypt.encrypt(texto); }
@@ -181,6 +179,7 @@ function finalizarLogin(user) {
   const keys = gerarParChaves();
   pubKey = keys.publicKey;
   privKey = keys.privateKey;
+  console.log('Chaves geradas. privKey definida:', !!privKey);
   socket.emit('registrar_usuario', { username: username, public_key: pubKey });
   socket.emit('solicitar_contatos');
   showChat();
@@ -215,7 +214,6 @@ function setupSocketListeners() {
     else { showError(data.message || 'Erro no registro', true); }
   });
 
-  // Fallback para verificação 2FA
   socket.on('verify_2fa_response', (data) => {
     if (!data.success) {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
@@ -233,7 +231,23 @@ function setupSocketListeners() {
 
   socket.on('message', (data) => {
     let from = data.from, content = data.content, texto = content;
-    if (privKey && content) { try { const dec = descriptografar(content, privKey); if (dec) texto = dec; } catch(e) {} }
+    // Tenta descriptografar se tiver chave privada
+    if (privKey && content) {
+      try {
+        const dec = descriptografar(content, privKey);
+        if (dec) {
+          texto = dec;
+        } else {
+          // descriptografar retornou null (chave não corresponde)
+          texto = '[Mensagem criptografada – chave não correspondente]';
+        }
+      } catch(e) {
+        texto = '[Erro ao descriptografar]';
+      }
+    } else if (!privKey) {
+      texto = '[Mensagem criptografada – chave privada indisponível]';
+    }
+
     if (from === destinatarioAtual) {
       addMessage(from + ': ' + texto, 'left');
       socket.emit('marcar_lida', { contato: from });
@@ -251,7 +265,15 @@ function setupSocketListeners() {
     document.getElementById('chat-messages').innerHTML = '';
     data.mensagens.forEach(msg => {
       let texto = msg.content;
-      if (privKey && texto) { try { const dec = descriptografar(texto, privKey); if (dec) texto = dec; } catch(e) {} }
+      if (privKey && texto) {
+        try {
+          const dec = descriptografar(texto, privKey);
+          if (dec) texto = dec;
+          else texto = '[Mensagem criptografada – chave não correspondente]';
+        } catch(e) { texto = '[Erro ao descriptografar]'; }
+      } else if (!privKey) {
+        texto = '[Mensagem criptografada – chave privada indisponível]';
+      }
       addMessage((msg.from === username ? 'Você' : msg.from) + ': ' + texto, msg.from === username ? 'right' : 'left');
     });
   });
