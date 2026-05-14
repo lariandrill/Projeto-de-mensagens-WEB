@@ -101,7 +101,9 @@ init_db()
 usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
-pending_2fa = {}
+
+# Códigos 2FA agora vinculados ao username (não ao sid)
+pending_2fa = {}   # { username: { 'code': ..., 'expires': ... } }
 
 def gerar_codigo_2fa():
     return str(random.randint(100000, 999999))
@@ -339,8 +341,8 @@ def handle_login_credencial(data):
             emit('login_response', {'success': False, 'message': 'E-mail não cadastrado'}, room=request.sid)
             return
         codigo = gerar_codigo_2fa()
-        pending_2fa[request.sid] = {
-            'username': username,
+        # Armazenar código vinculado ao username
+        pending_2fa[username] = {
             'code': codigo,
             'expires': datetime.now() + timedelta(minutes=10)
         }
@@ -354,7 +356,13 @@ def handle_login_credencial(data):
 @socketio.on('verify_2fa')
 def handle_verify_2fa(data):
     code = data.get('code')
-    pending = pending_2fa.pop(request.sid, None)
+    username = sid_to_username.get(request.sid)   # recupera o usuário logado
+
+    if not username:
+        emit('verify_2fa_response', {'success': False, 'message': 'Usuário não identificado'}, room=request.sid)
+        return
+
+    pending = pending_2fa.pop(username, None)
     if not pending:
         emit('verify_2fa_response', {'success': False, 'message': 'Nenhuma solicitação pendente'}, room=request.sid)
         return
@@ -364,8 +372,6 @@ def handle_verify_2fa(data):
     if code != pending['code']:
         emit('verify_2fa_response', {'success': False, 'message': 'Código incorreto'}, room=request.sid)
         return
-
-    username = pending['username']
 
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     if ip and ',' in ip:
