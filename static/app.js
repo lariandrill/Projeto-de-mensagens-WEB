@@ -13,6 +13,20 @@ let pendingConfirmations = {};
 // Variável temporária para 2FA
 let tempUsername = null;
 
+// ---------- Gerenciamento de dispositivo ----------
+function getDeviceId() {
+  let deviceId = localStorage.getItem('device_id');
+  if (!deviceId) {
+    deviceId = crypto.randomUUID ? crypto.randomUUID() :
+               'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                 const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                 return v.toString(16);
+               });
+    localStorage.setItem('device_id', deviceId);
+  }
+  return deviceId;
+}
+
 // ---------- Inicialização defensiva ----------
 document.addEventListener('DOMContentLoaded', function () {
   console.log('1. DOM pronto. Iniciando app...');
@@ -110,8 +124,9 @@ function login() {
   const p = document.getElementById('login-password').value.trim();
   if (!u || !p) { showError('Preencha todos os campos!'); return; }
   tempUsername = u;
+  const deviceId = getDeviceId();
   const hash = sha256(p);
-  socket.emit('login_usuario', { username: u, password_hash: hash });
+  socket.emit('login_usuario', { username: u, password_hash: hash, device_id: deviceId });
 }
 
 function register() {
@@ -129,7 +144,6 @@ function register() {
 // ---------- 2FA ----------
 function verify2FA() {
   const btn = document.getElementById('twofa-btn');
-  // Evita duplo clique
   btn.disabled = true;
   btn.textContent = 'VERIFICANDO...';
 
@@ -147,15 +161,14 @@ function verify2FA() {
     return;
   }
 
-  socket.emit('verify_2fa', { code: code, username: tempUsername });
+  const deviceId = getDeviceId();
+  socket.emit('verify_2fa', { code: code, username: tempUsername, device_id: deviceId });
 
-  // Aguarda a resposta do servidor (uma única vez)
   socket.once('verify_2fa_response', (data) => {
     if (data.success) {
       finalizarLogin(data.username);
     } else {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
-      // Reabilita o botão para nova tentativa
       btn.disabled = false;
       btn.textContent = 'VERIFICAR';
     }
@@ -190,7 +203,6 @@ function setupSocketListeners() {
         showTwoFA();
         document.getElementById('twofa-error').textContent = '';
       } else {
-        // Login direto
         finalizarLogin(data.username);
       }
     } else {
@@ -203,7 +215,7 @@ function setupSocketListeners() {
     else { showError(data.message || 'Erro no registro', true); }
   });
 
-  // Fallback para verificação 2FA (caso o socket.once não capture)
+  // Fallback para verificação 2FA
   socket.on('verify_2fa_response', (data) => {
     if (!data.success) {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
