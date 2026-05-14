@@ -11,6 +11,19 @@ let naoLidas = {};
 let pendingConfirmations = {};
 let tempUsername = null;
 
+// ---------- Persistência das chaves RSA ----------
+function saveKeys(pub, priv) {
+  localStorage.setItem('hermes_pubkey', pub);
+  localStorage.setItem('hermes_privkey', priv);
+}
+
+function loadKeys() {
+  return {
+    pubKey: localStorage.getItem('hermes_pubkey'),
+    privKey: localStorage.getItem('hermes_privkey')
+  };
+}
+
 // ---------- Gerenciamento de dispositivo ----------
 function getDeviceId() {
   let deviceId = localStorage.getItem('device_id');
@@ -176,10 +189,21 @@ function verify2FA() {
 function finalizarLogin(user) {
   username = user;
   tempUsername = null;
-  const keys = gerarParChaves();
-  pubKey = keys.publicKey;
-  privKey = keys.privateKey;
-  console.log('Chaves geradas. privKey definida:', !!privKey);
+
+  // Tenta carregar chaves do dispositivo; se não existirem, gera e salva
+  let keys = loadKeys();
+  if (keys.pubKey && keys.privKey) {
+    pubKey = keys.pubKey;
+    privKey = keys.privKey;
+    console.log('Chaves carregadas do dispositivo.');
+  } else {
+    keys = gerarParChaves();
+    pubKey = keys.publicKey;
+    privKey = keys.privateKey;
+    saveKeys(pubKey, privKey);
+    console.log('Novas chaves geradas e armazenadas.');
+  }
+
   socket.emit('registrar_usuario', { username: username, public_key: pubKey });
   socket.emit('solicitar_contatos');
   showChat();
@@ -214,6 +238,7 @@ function setupSocketListeners() {
     else { showError(data.message || 'Erro no registro', true); }
   });
 
+  // Fallback para verificação 2FA
   socket.on('verify_2fa_response', (data) => {
     if (!data.success) {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
@@ -231,14 +256,13 @@ function setupSocketListeners() {
 
   socket.on('message', (data) => {
     let from = data.from, content = data.content, texto = content;
-    // Tenta descriptografar se tiver chave privada
+    // Tenta descriptografar se a chave privada estiver disponível
     if (privKey && content) {
       try {
         const dec = descriptografar(content, privKey);
         if (dec) {
           texto = dec;
         } else {
-          // descriptografar retornou null (chave não corresponde)
           texto = '[Mensagem criptografada – chave não correspondente]';
         }
       } catch(e) {
@@ -269,10 +293,10 @@ function setupSocketListeners() {
         try {
           const dec = descriptografar(texto, privKey);
           if (dec) texto = dec;
-          else texto = '[Mensagem criptografada – chave não correspondente]';
-        } catch(e) { texto = '[Erro ao descriptografar]'; }
+          else texto = '[Histórico de outro dispositivo – ilegível]';
+        } catch(e) { texto = '[Erro ao descriptografar histórico]'; }
       } else if (!privKey) {
-        texto = '[Mensagem criptografada – chave privada indisponível]';
+        texto = '[Histórico criptografado – chave privada ausente]';
       }
       addMessage((msg.from === username ? 'Você' : msg.from) + ': ' + texto, msg.from === username ? 'right' : 'left');
     });
