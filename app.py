@@ -102,7 +102,7 @@ usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
 
-# Códigos 2FA agora vinculados ao username
+# Códigos 2FA vinculados ao username
 pending_2fa = {}
 
 def gerar_codigo_2fa():
@@ -321,7 +321,7 @@ def handle_registro_credencial(data):
         cur.close()
         conn.close()
 
-# --------------- Login com 2FA ---------------
+# --------------- Login com 2FA (somente para IP novo) ---------------
 @socketio.on('login_usuario')
 def handle_login_credencial(data):
     username = data.get('username')
@@ -329,34 +329,61 @@ def handle_login_credencial(data):
     if not username or not password_hash:
         emit('login_response', {'success': False, 'message': 'Dados incompletos'}, room=request.sid)
         return
+
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT password_hash, email FROM usuarios WHERE username = %s', (username,))
+    cur.execute('SELECT password_hash, email, last_ip FROM usuarios WHERE username = %s', (username,))
     row = cur.fetchone()
     cur.close()
     conn.close()
-    if row and row[0] == password_hash:
-        email = row[1]
-        if not email:
-            emit('login_response', {'success': False, 'message': 'E-mail não cadastrado'}, room=request.sid)
-            return
-        codigo = gerar_codigo_2fa()
-        # Armazenar código vinculado ao username
-        pending_2fa[username] = {
-            'code': codigo,
-            'expires': datetime.now() + timedelta(minutes=10)
-        }
-        assunto = "HERMES - Código de Verificação"
-        corpo = f"Seu código de verificação é: {codigo}\nEle expira em 10 minutos."
-        threading.Thread(target=enviar_email, args=(email, assunto, corpo)).start()
-        emit('login_response', {'success': True, 'awaiting_2fa': True, 'message': 'Código enviado'}, room=request.sid)
-    else:
-        emit('login_response', {'success': False, 'message': 'Usuário ou senha incorretos'}, room=request.sid)
 
+    if not row or row[0] != password_hash:
+        emit('login_response', {'success': False, 'message': 'Usuário ou senha incorretos'}, room=request.sid)
+        return
+
+    email = row[1]
+    last_ip = row[2]
+
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if ip and ',' in ip:
+        ip = ip.split(',')[0].strip()
+
+    # Se o IP for igual ao último, login direto (sem 2FA)
+    if last_ip and last_ip == ip:
+        emit('login_response', {
+            'success': True,
+            'awaiting_2fa': False,
+            'username': username,
+            'message': 'Login direto'
+        }, room=request.sid)
+        return
+
+    # IP diferente ou primeiro login → 2FA
+    if not email:
+        emit('login_response', {'success': False, 'message': 'E-mail não cadastrado'}, room=request.sid)
+        return
+
+    codigo = gerar_codigo_2fa()
+    pending_2fa[username] = {
+        'code': codigo,
+        'expires': datetime.now() + timedelta(minutes=10)
+    }
+
+    assunto = "HERMES - Código de Verificação"
+    corpo = f"Seu código de verificação é: {codigo}\nEle expira em 10 minutos."
+    threading.Thread(target=enviar_email, args=(email, assunto, corpo)).start()
+
+    emit('login_response', {
+        'success': True,
+        'awaiting_2fa': True,
+        'message': 'Código enviado'
+    }, room=request.sid)
+
+# --------------- Verificação 2FA ---------------
 @socketio.on('verify_2fa')
 def handle_verify_2fa(data):
     code = data.get('code')
-    username = data.get('username')   # agora o cliente envia o nome de usuário
+    username = data.get('username')
 
     if not username:
         emit('verify_2fa_response', {'success': False, 'message': 'Usuário não identificado'}, room=request.sid)
@@ -377,7 +404,7 @@ def handle_verify_2fa(data):
     if ip and ',' in ip:
         ip = ip.split(',')[0].strip()
 
-    # Atualiza IP e envia alerta de novo login (se possível)
+    # Atualiza IP e envia alerta de novo login
     try:
         conn = get_db_connection()
         cur = conn.cursor()
