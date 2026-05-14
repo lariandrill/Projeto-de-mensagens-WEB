@@ -102,8 +102,8 @@ usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
 
-# Códigos 2FA agora vinculados ao username (não ao sid)
-pending_2fa = {}   # { username: { 'code': ..., 'expires': ... } }
+# Códigos 2FA agora vinculados ao username
+pending_2fa = {}
 
 def gerar_codigo_2fa():
     return str(random.randint(100000, 999999))
@@ -356,7 +356,7 @@ def handle_login_credencial(data):
 @socketio.on('verify_2fa')
 def handle_verify_2fa(data):
     code = data.get('code')
-    username = sid_to_username.get(request.sid)   # recupera o usuário logado
+    username = data.get('username')   # agora o cliente envia o nome de usuário
 
     if not username:
         emit('verify_2fa_response', {'success': False, 'message': 'Usuário não identificado'}, room=request.sid)
