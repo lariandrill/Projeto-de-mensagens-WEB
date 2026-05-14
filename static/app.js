@@ -109,7 +109,7 @@ function login() {
   const u = document.getElementById('login-username').value.trim();
   const p = document.getElementById('login-password').value.trim();
   if (!u || !p) { showError('Preencha todos os campos!'); return; }
-  tempUsername = u;  // armazena o nome de usuário para o 2FA
+  tempUsername = u;
   const hash = sha256(p);
   socket.emit('login_usuario', { username: u, password_hash: hash });
 }
@@ -128,30 +128,43 @@ function register() {
 
 // ---------- 2FA ----------
 function verify2FA() {
+  const btn = document.getElementById('twofa-btn');
+  // Evita duplo clique
+  btn.disabled = true;
+  btn.textContent = 'VERIFICANDO...';
+
   const code = document.getElementById('twofa-code').value.trim();
   if (code.length !== 6) {
     document.getElementById('twofa-error').textContent = 'Código deve ter 6 dígitos';
+    btn.disabled = false;
+    btn.textContent = 'VERIFICAR';
     return;
   }
   if (!tempUsername) {
     document.getElementById('twofa-error').textContent = 'Erro: usuário não encontrado. Refaça o login.';
+    btn.disabled = false;
+    btn.textContent = 'VERIFICAR';
     return;
   }
+
   socket.emit('verify_2fa', { code: code, username: tempUsername });
+
+  // Aguarda a resposta do servidor (uma única vez)
   socket.once('verify_2fa_response', (data) => {
-    // Exibe a resposta do servidor (depuração)
-    alert('Resposta do servidor: ' + JSON.stringify(data));
     if (data.success) {
       finalizarLogin(data.username);
     } else {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
+      // Reabilita o botão para nova tentativa
+      btn.disabled = false;
+      btn.textContent = 'VERIFICAR';
     }
   });
 }
 
 function finalizarLogin(user) {
   username = user;
-  tempUsername = null;  // limpa a variável temporária
+  tempUsername = null;
   const keys = gerarParChaves();
   pubKey = keys.publicKey;
   privKey = keys.privateKey;
@@ -177,6 +190,7 @@ function setupSocketListeners() {
         showTwoFA();
         document.getElementById('twofa-error').textContent = '';
       } else {
+        // Login direto
         finalizarLogin(data.username);
       }
     } else {
@@ -193,6 +207,9 @@ function setupSocketListeners() {
   socket.on('verify_2fa_response', (data) => {
     if (!data.success) {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
+      const btn = document.getElementById('twofa-btn');
+      btn.disabled = false;
+      btn.textContent = 'VERIFICAR';
     }
   });
 
@@ -254,33 +271,23 @@ function addMessage(texto, lado, isTemp = false) {
   const div = document.createElement('div');
   div.className = 'message ' + lado;
   if (lado === 'right' && isTemp) {
-    const textSpan = document.createElement('span');
-    textSpan.textContent = texto;
-    const statusSpan = document.createElement('span');
-    statusSpan.className = 'msg-status';
-    statusSpan.textContent = ' ⌛';
-    statusSpan.style.marginLeft = '5px';
-    statusSpan.style.fontSize = '0.8em';
-    div.appendChild(textSpan);
-    div.appendChild(statusSpan);
+    const textSpan = document.createElement('span'); textSpan.textContent = texto;
+    const statusSpan = document.createElement('span'); statusSpan.className = 'msg-status'; statusSpan.textContent = ' ⌛';
+    statusSpan.style.marginLeft = '5px'; statusSpan.style.fontSize = '0.8em';
+    div.appendChild(textSpan); div.appendChild(statusSpan);
     if (destinatarioAtual) pendingConfirmations[destinatarioAtual] = statusSpan;
     setTimeout(() => {
       if (statusSpan.textContent === ' ⌛' && pendingConfirmations[destinatarioAtual] === statusSpan) {
-        statusSpan.textContent = ' ⚠️';
-        statusSpan.style.color = '#f80';
-        delete pendingConfirmations[destinatarioAtual];
+        statusSpan.textContent = ' ⚠️'; statusSpan.style.color = '#f80'; delete pendingConfirmations[destinatarioAtual];
       }
     }, 30000);
-  } else {
-    div.textContent = texto;
-  }
+  } else { div.textContent = texto; }
   document.getElementById('chat-messages').appendChild(div);
   div.scrollIntoView({ behavior: 'smooth' });
 }
 
 function sendMessage() {
-  const input = document.getElementById('msg-input');
-  const texto = input.value.trim();
+  const input = document.getElementById('msg-input'); const texto = input.value.trim();
   if (!texto || !destinatarioAtual) return;
   const chaveDest = chavesAmigos[destinatarioAtual];
   const conteudo = chaveDest ? criptografar(texto, chaveDest) : texto;
@@ -288,7 +295,6 @@ function sendMessage() {
   addMessage('Você: ' + texto, 'right', true);
   input.value = '';
 }
-
 function emitTyping() { if (destinatarioAtual) socket.emit('digitando', { to: destinatarioAtual, from: username }); }
 
 // ---------- Menu e Contatos ----------
