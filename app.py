@@ -74,13 +74,22 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Adiciona colunas que podem não existir em migrações anteriores
     for col in ['email', 'last_ip', 'device_id']:
         try:
             cur.execute(f'ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {col} TEXT')
         except Exception as e:
             logger.warning(f"Não foi possível adicionar a coluna {col}: {e}")
+
+    # Tabela para códigos 2FA (persistente)
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS pending_2fa (
+            username TEXT PRIMARY KEY,
+            code TEXT NOT NULL,
+            expires TIMESTAMP NOT NULL
+        )
+    ''')
     conn.commit()
+
     cur.execute('''
         CREATE TABLE IF NOT EXISTS mensagens (
             id SERIAL PRIMARY KEY,
@@ -102,9 +111,6 @@ init_db()
 usuarios_online = {}
 sid_to_username = {}
 mensagens_offline = {}
-
-# Códigos 2FA vinculados ao username
-pending_2fa = {}
 
 def gerar_codigo_2fa():
     return str(random.randint(100000, 999999))
@@ -322,12 +328,12 @@ def handle_registro_credencial(data):
         cur.close()
         conn.close()
 
-# --------------- Login com device_id ---------------
+# --------------- Login com device_id (código no banco) ---------------
 @socketio.on('login_usuario')
 def handle_login_credencial(data):
     username = data.get('username')
     password_hash = data.get('password_hash')
-    device_id = data.get('device_id')  # identificador do dispositivo
+    device_id = data.get('device_id')
 
     if not username or not password_hash:
         emit('login_response', {'success': False, 'message': 'Dados incompletos'}, room=request.sid)
@@ -347,7 +353,7 @@ def handle_login_credencial(data):
     email = row[1]
     stored_device = row[2]
 
-    # Se o device_id enviado for igual ao armazenado, login direto (mesmo dispositivo)
+    # Se mesmo dispositivo, login direto
     if device_id and stored_device and device_id == stored_device:
         emit('login_response', {
             'success': True,
@@ -357,16 +363,23 @@ def handle_login_credencial(data):
         }, room=request.sid)
         return
 
-    # Dispositivo novo ou primeiro login → 2FA
     if not email:
         emit('login_response', {'success': False, 'message': 'E-mail não cadastrado'}, room=request.sid)
         return
 
+    # Dispositivo novo → gerar código e armazenar no banco
     codigo = gerar_codigo_2fa()
-    pending_2fa[username] = {
-        'code': codigo,
-        'expires': datetime.now() + timedelta(minutes=10)
-    }
+    expires = datetime.now() + timedelta(minutes=10)
+
+    # Remove qualquer código pendente antigo e insere o novo
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM pending_2fa WHERE username = %s', (username,))
+    cur.execute('INSERT INTO pending_2fa (username, code, expires) VALUES (%s, %s, %s)',
+                (username, codigo, expires))
+    conn.commit()
+    cur.close()
+    conn.close()
 
     assunto = "HERMES - Código de Verificação"
     corpo = f"Seu código de verificação é: {codigo}\nEle expira em 10 minutos."
@@ -378,52 +391,71 @@ def handle_login_credencial(data):
         'message': 'Código enviado'
     }, room=request.sid)
 
-# --------------- Verificação 2FA (atualiza device_id) ---------------
+# --------------- Verificação 2FA (consulta banco) ---------------
 @socketio.on('verify_2fa')
 def handle_verify_2fa(data):
     code = data.get('code')
     username = data.get('username')
-    device_id = data.get('device_id')  # enviado pelo cliente no momento da verificação
+    device_id = data.get('device_id')
 
     if not username:
         emit('verify_2fa_response', {'success': False, 'message': 'Usuário não identificado'}, room=request.sid)
         return
 
-    pending = pending_2fa.pop(username, None)
+    # Busca código no banco
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT code, expires FROM pending_2fa WHERE username = %s', (username,))
+    pending = cur.fetchone()
+
     if not pending:
+        cur.close()
+        conn.close()
         emit('verify_2fa_response', {'success': False, 'message': 'Nenhuma solicitação pendente'}, room=request.sid)
         return
-    if datetime.now() > pending['expires']:
+
+    stored_code, expires = pending
+    if datetime.now() > expires:
+        cur.execute('DELETE FROM pending_2fa WHERE username = %s', (username,))
+        conn.commit()
+        cur.close()
+        conn.close()
         emit('verify_2fa_response', {'success': False, 'message': 'Código expirado'}, room=request.sid)
         return
-    if code != pending['code']:
+
+    if code != stored_code:
+        cur.close()
+        conn.close()
         emit('verify_2fa_response', {'success': False, 'message': 'Código incorreto'}, room=request.sid)
         return
+
+    # Código correto: remove do banco
+    cur.execute('DELETE FROM pending_2fa WHERE username = %s', (username,))
+    conn.commit()
 
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     if ip and ',' in ip:
         ip = ip.split(',')[0].strip()
 
-    # Atualiza IP, device_id e envia alerta de novo login
+    # Atualiza IP e device_id
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT email, last_ip FROM usuarios WHERE username = %s', (username,))
-        user_info = cur.fetchone()
-        if user_info:
-            email, last_ip = user_info
-            if last_ip and last_ip != ip:
-                alerta_assunto = "HERMES - Novo login detectado"
-                alerta_corpo = f"Um novo login foi realizado na sua conta a partir do IP {ip}.\nSe não foi você, altere sua senha imediatamente."
-                threading.Thread(target=enviar_email, args=(email, alerta_assunto, alerta_corpo)).start()
-            # Registra o novo dispositivo
-            cur.execute('UPDATE usuarios SET last_ip = %s, device_id = %s WHERE username = %s',
-                        (ip, device_id, username))
-            conn.commit()
-        cur.close()
-        conn.close()
+        cur.execute('UPDATE usuarios SET last_ip = %s, device_id = %s WHERE username = %s',
+                    (ip, device_id, username))
+        conn.commit()
     except Exception as e:
         logger.error(f"Erro ao atualizar IP/device: {e}")
+
+    # Envia alerta de novo login (se aplicável)
+    cur.execute('SELECT email FROM usuarios WHERE username = %s', (username,))
+    email_row = cur.fetchone()
+    if email_row:
+        email = email_row[0]
+        alerta_assunto = "HERMES - Novo login detectado"
+        alerta_corpo = f"Um novo login foi realizado na sua conta a partir do IP {ip}.\nSe não foi você, altere sua senha imediatamente."
+        threading.Thread(target=enviar_email, args=(email, alerta_assunto, alerta_corpo)).start()
+
+    cur.close()
+    conn.close()
 
     emit('verify_2fa_response', {'success': True, 'username': username, 'message': 'OK'}, room=request.sid)
 
@@ -431,6 +463,6 @@ def handle_verify_2fa(data):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print('=' * 60)
-    print('SERVIDOR CHAT - HERMES WEB (com 2FA por dispositivo)')
+    print('SERVIDOR CHAT - HERMES WEB (com 2FA por dispositivo + DB)')
     print('=' * 60)
     socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False)
