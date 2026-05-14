@@ -67,6 +67,7 @@ function setupUI() {
   document.getElementById('contacts-close-btn').addEventListener('click', () => {
     document.getElementById('contacts-overlay').classList.remove('active');
   });
+  // O botão twofa-btn agora usa onclick no HTML, mas mantemos um listener também (não causa problema)
   document.getElementById('twofa-btn').addEventListener('click', verify2FA);
   document.getElementById('twofa-cancel-btn').addEventListener('click', () => showLogin());
   document.getElementById('notificacoes-check').addEventListener('change', saveConfig);
@@ -160,7 +161,17 @@ function verify2FA() {
     document.getElementById('twofa-error').textContent = 'Código deve ter 6 dígitos';
     return;
   }
+  // Emite o evento de verificação e aguarda a resposta usando socket.once para capturar a resposta uma vez
   socket.emit('verify_2fa', { code: code });
+  socket.once('verify_2fa_response', (data) => {
+    // Exibe a resposta do servidor via alerta (depuração)
+    alert('Resposta do servidor: ' + JSON.stringify(data));
+    if (data.success) {
+      finalizarLogin(data.username);
+    } else {
+      document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
+    }
+  });
 }
 
 function finalizarLogin(user) {
@@ -206,10 +217,11 @@ function setupSocketListeners() {
     }
   });
 
+  // Removido o listener anterior de verify_2fa_response, pois agora é tratado em verify2FA() via socket.once
+  // Se o socket.once falhar (ex.: evento recebido antes do once), mantemos um fallback no listener permanente
   socket.on('verify_2fa_response', (data) => {
-    if (data.success) {
-      finalizarLogin(data.username);
-    } else {
+    // Fallback: se o once não foi usado (raro), tratamos aqui
+    if (!data.success) {
       document.getElementById('twofa-error').textContent = data.message || 'Código inválido';
     }
   });
